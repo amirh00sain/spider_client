@@ -3,11 +3,47 @@
   "productName": "Xray Glass",
   "version": "0.1.0",
   "identifier": "app.xray.glass",
-  "build": { "frontendDist": "../ui" },
-  "app": {
-    "windows": [{ "title": "Xray Glass", "width": 1120, "height": 760, "minWidth": 860, "minHeight": 640, "decorations": true, "transparent": false }],
-    "withGlobalTauri": true,
-    "security": { "csp": "default-src 'self' asset: http://asset.localhost; img-src 'self' data:; style-src 'self' 'unsafe-inline'; script-src 'self' 'unsafe-inline'; connect-src ipc: http://ipc.localhost https://api.github.com" }
+  "build": {
+    "frontendDist": "../ui"
   },
-  "bundle": { "active": true, "targets": ["appimage", "deb"], "shortDescription": "Xray desktop client", "category": "Network", "resources": { "resources/xray": "xray", "resources/geoip.dat": "geoip.dat", "resources/geosite.dat": "geosite.dat" } }
+  "app": {
+    "windows": [
+      {
+        "title": "Xray Glass",
+        "width": 1120,
+        "height": 760,
+        "minWidth": 860,
+        "minHeight": 640,
+        "decorations": true,
+        "transparent": false
+      }
+    ],
+    "withGlobalTauri": true,
+    "security": {
+      "csp": "default-src 'self' asset: http://asset.localhost; img-src 'self' data:; style-src 'self' 'unsafe-inline'; script-src 'self' 'unsafe-inline'; connect-src ipc: http://ipc.localhost https://api.github.com"
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": [
+      "appimage",
+      "deb"
+    ],
+    "shortDescription": "Xray, sing-box, mihomo, Aether and MHR desktop client",
+    "category": "Network",
+    "resources": [
+      "resources/*",
+      "resources/mhr",
+      "resources/pt",
+      "resources/aether-LICENSES",
+      "resources/sni-spoofing"
+    ],
+    "linux": {
+      "deb": {
+        "depends": [
+          "python3 (>= 3.10)"
+        ]
+      }
+    }
+  }
 }

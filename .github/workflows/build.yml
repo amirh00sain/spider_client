@@ -1,40 +1,173 @@
-name: build-linux
+name: Linux builds
+
 on:
   push:
   pull_request:
   workflow_dispatch:
+
 permissions:
   contents: read
+
 jobs:
   build:
-    runs-on: ubuntu-24.04
+    name: Linux ${{ matrix.label }}
+    if: matrix.label != 'arm64' || github.event.repository.visibility == 'public'
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - label: x64
+            runner: ubuntu-24.04
+            xray_archive: Xray-linux-64.zip
+            aether_archive: aether-linux-x86_64.tar.gz
+            singbox_archive: sing-box-1.14.4-linux-amd64.tar.gz
+            singbox_sha256: 699a1b510aa4396b2176d32d1181920399ebf1e267835da6f3b598d0f7c24968
+            mihomo_archive: mihomo-linux-amd64-v1.19.33.gz
+          - label: arm64
+            runner: ubuntu-24.04-arm
+            xray_archive: Xray-linux-arm64-v8a.zip
+            aether_archive: aether-linux-arm64.tar.gz
+            singbox_archive: sing-box-1.14.4-linux-arm64.tar.gz
+            singbox_sha256: 436441f76ee2f7fe21b5b2d426d3cb261a480455a704865789ad533e4273ec26
+            mihomo_archive: mihomo-linux-arm64-v1.19.33.gz
+    runs-on: ${{ matrix.runner }}
+    env:
+      CARGO_REGISTRIES_CRATES_IO_PROTOCOL: sparse
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 22
-      - uses: dtolnay/rust-toolchain@stable
-        with:
-          targets: x86_64-unknown-linux-gnu
-      - name: Install Linux build dependencies
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Tauri Linux dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y build-essential curl wget file libayatana-appindicator3-dev librsvg2-dev patchelf libwebkit2gtk-4.1-dev libgtk-3-dev libssl-dev libxdo-dev libayatana-appindicator3-1
-      - name: Download Xray core
+          sudo apt-get install -y \
+            build-essential curl wget file unzip patchelf libfuse2 \
+            libwebkit2gtk-4.1-dev libgtk-3-dev libayatana-appindicator3-dev \
+            librsvg2-dev libssl-dev libxdo-dev
+
+      - name: Set up Python for MHR dependencies
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Rust build
+        uses: swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri -> target
+          cache-on-failure: true
+
+      - name: Vendor MHR Python dependencies
         run: |
-          mkdir -p src-tauri/resources
-          curl -fL https://github.com/XTLS/Xray-core/releases/latest/download/Xray-linux-64.zip -o /tmp/xray.zip
+          set -euo pipefail
+          python -m pip install --disable-pip-version-check --no-cache-dir \
+            --target src-tauri/resources/mhr/vendor \
+            -r src-tauri/resources/mhr/requirements.txt
+          PYTHONPATH="$GITHUB_WORKSPACE/src-tauri/resources/mhr/vendor" python -c \
+            'import certifi, cryptography, h2, brotli, zstandard; print("MHR dependencies ready")'
+
+      - name: Download matching Xray core
+        env:
+          XRAY_ARCHIVE: ${{ matrix.xray_archive }}
+        run: |
+          set -euo pipefail
+          mkdir -p src-tauri/resources /tmp/xray-core
+          curl -fL --retry 3 "https://github.com/XTLS/Xray-core/releases/latest/download/${XRAY_ARCHIVE}" -o /tmp/xray.zip
           unzip -o /tmp/xray.zip xray geoip.dat geosite.dat -d /tmp/xray-core
           install -m 0755 /tmp/xray-core/xray src-tauri/resources/xray
           install -m 0644 /tmp/xray-core/geoip.dat src-tauri/resources/geoip.dat
           install -m 0644 /tmp/xray-core/geosite.dat src-tauri/resources/geosite.dat
           src-tauri/resources/xray version
-      - run: npm install
-      - name: Build desktop bundles
+
+      - name: Download matching Aether core
+        env:
+          AETHER_ARCHIVE: ${{ matrix.aether_archive }}
+        run: |
+          set -euo pipefail
+          mkdir -p src-tauri/resources /tmp/aether-download /tmp/aether-extract
+          cd /tmp/aether-download
+          curl -fL --retry 3 "https://github.com/CluvexStudio/Aether/releases/latest/download/${AETHER_ARCHIVE}" -o "${AETHER_ARCHIVE}"
+          curl -fL --retry 3 "https://github.com/CluvexStudio/Aether/releases/latest/download/${AETHER_ARCHIVE}.sha256" -o "${AETHER_ARCHIVE}.sha256"
+          sha256sum --check "${AETHER_ARCHIVE}.sha256"
+          tar -xzf "${AETHER_ARCHIVE}" -C /tmp/aether-extract
+          AETHER_BIN="$(find /tmp/aether-extract -type f -name aether -print -quit)"
+          test -n "${AETHER_BIN}"
+          install -m 0755 "${AETHER_BIN}" "$GITHUB_WORKSPACE/src-tauri/resources/aether"
+          LICENSES_DIR="$(find /tmp/aether-extract -type d -name LICENSES -print -quit)"
+          if [ -n "${LICENSES_DIR}" ]; then
+            cp -R "${LICENSES_DIR}" "$GITHUB_WORKSPACE/src-tauri/resources/aether-LICENSES"
+          else
+            mkdir -p "$GITHUB_WORKSPACE/src-tauri/resources/aether-LICENSES"
+          fi
+          PT_DIR="$(find /tmp/aether-extract -type d -name pt -print -quit)"
+          mkdir -p "$GITHUB_WORKSPACE/src-tauri/resources/pt"
+          test -n "${PT_DIR}"
+          cp -a "${PT_DIR}/." "$GITHUB_WORKSPACE/src-tauri/resources/pt/"
+          PT_BIN="$(find "$GITHUB_WORKSPACE/src-tauri/resources/pt" -type f \( -iname '*psiphon*tunnel*core*' -o -iname 'psiphon' \) -print -quit)"
+          test -n "${PT_BIN}"
+          if [ "${PT_BIN}" != "$GITHUB_WORKSPACE/src-tauri/resources/pt/psiphon-tunnel-core" ]; then
+            install -m 0755 "${PT_BIN}" "$GITHUB_WORKSPACE/src-tauri/resources/pt/psiphon-tunnel-core"
+          fi
+          "$GITHUB_WORKSPACE/src-tauri/resources/aether" --help
+
+      - name: Download sing-box core
+        env:
+          SINGBOX_ARCHIVE: ${{ matrix.singbox_archive }}
+          SINGBOX_SHA256: ${{ matrix.singbox_sha256 }}
+        run: |
+          set -euo pipefail
+          mkdir -p /tmp/sing-box
+          curl -fL --retry 3 "https://github.com/SagerNet/sing-box/releases/download/v1.14.4/${SINGBOX_ARCHIVE}" -o "/tmp/sing-box/${SINGBOX_ARCHIVE}"
+          echo "${SINGBOX_SHA256}  /tmp/sing-box/${SINGBOX_ARCHIVE}" | sha256sum --check
+          tar -xzf "/tmp/sing-box/${SINGBOX_ARCHIVE}" -C /tmp/sing-box
+          install -m 0755 "$(find /tmp/sing-box -type f -name sing-box -print -quit)" src-tauri/resources/sing-box
+          src-tauri/resources/sing-box version
+
+      - name: Download mihomo core
+        env:
+          MIHOMO_ARCHIVE: ${{ matrix.mihomo_archive }}
+        run: |
+          set -euo pipefail
+          mkdir -p /tmp/mihomo
+          curl -fL --retry 3 "https://github.com/MetaCubeX/mihomo/releases/download/v1.19.33/${MIHOMO_ARCHIVE}" -o "/tmp/mihomo/${MIHOMO_ARCHIVE}"
+          curl -fL --retry 3 "https://github.com/MetaCubeX/mihomo/releases/download/v1.19.33/${MIHOMO_ARCHIVE}.sha256" -o "/tmp/mihomo/${MIHOMO_ARCHIVE}.sha256"
+          (cd /tmp/mihomo && sha256sum --check "${MIHOMO_ARCHIVE}.sha256")
+          gzip -dc "/tmp/mihomo/${MIHOMO_ARCHIVE}" > src-tauri/resources/mihomo
+          chmod 0755 src-tauri/resources/mihomo
+          src-tauri/resources/mihomo -v
+
+      - name: Install frontend dependencies
+        run: npm install
+
+      - name: Verify complete runtime payload
+        run: |
+          set -euo pipefail
+          for core in xray sing-box mihomo aether; do
+            test -x "src-tauri/resources/$core"
+          done
+          test -s src-tauri/resources/geoip.dat
+          test -s src-tauri/resources/geosite.dat
+          test -f src-tauri/resources/mhr/main.py
+          test -x src-tauri/resources/pt/psiphon-tunnel-core
+          test -f src-tauri/resources/sni-spoofing/main.py
+          PYTHONPATH="$GITHUB_WORKSPACE/src-tauri/resources/mhr/vendor" python -c \
+            'import certifi, cryptography, h2, brotli, zstandard'
+          find src-tauri/resources/mhr/vendor -type d -name __pycache__ -prune -exec rm -rf {} +
+
+      - name: Build AppImage and deb
         run: npx tauri build --bundles appimage,deb
-      - uses: actions/upload-artifact@v4
+
+      - name: Upload Linux packages
+        uses: actions/upload-artifact@v4
         with:
-          name: xray-glass-linux
+          name: xray-glass-linux-${{ matrix.label }}
           path: |
             src-tauri/target/release/bundle/appimage/*.AppImage
             src-tauri/target/release/bundle/deb/*.deb
