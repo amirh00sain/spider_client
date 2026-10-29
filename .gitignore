@@ -1,0 +1,6 @@
+/node_modules/
+/src-tauri/target/
+/src-tauri/resources/xray
+/src-tauri/resources/geoip.dat
+/src-tauri/resources/geosite.dat
+*.log

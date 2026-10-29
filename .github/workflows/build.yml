@@ -1,0 +1,41 @@
+name: build-linux
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-unknown-linux-gnu
+      - name: Install Linux build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential curl wget file libayatana-appindicator3-dev librsvg2-dev patchelf libwebkit2gtk-4.1-dev libgtk-3-dev libssl-dev libxdo-dev libayatana-appindicator3-1
+      - name: Download Xray core
+        run: |
+          mkdir -p src-tauri/resources
+          curl -fL https://github.com/XTLS/Xray-core/releases/latest/download/Xray-linux-64.zip -o /tmp/xray.zip
+          unzip -o /tmp/xray.zip xray geoip.dat geosite.dat -d /tmp/xray-core
+          install -m 0755 /tmp/xray-core/xray src-tauri/resources/xray
+          install -m 0644 /tmp/xray-core/geoip.dat src-tauri/resources/geoip.dat
+          install -m 0644 /tmp/xray-core/geosite.dat src-tauri/resources/geosite.dat
+          src-tauri/resources/xray version
+      - run: npm install
+      - name: Build desktop bundles
+        run: npx tauri build --bundles appimage,deb
+      - uses: actions/upload-artifact@v4
+        with:
+          name: xray-glass-linux
+          path: |
+            src-tauri/target/release/bundle/appimage/*.AppImage
+            src-tauri/target/release/bundle/deb/*.deb
+          if-no-files-found: error
