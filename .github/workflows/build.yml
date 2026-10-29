@@ -11,7 +11,6 @@ permissions:
 jobs:
   build:
     name: Linux ${{ matrix.label }}
-    if: matrix.label != 'arm64' || github.event.repository.visibility == 'public'
     strategy:
       fail-fast: false
       matrix:
@@ -23,6 +22,7 @@ jobs:
             singbox_archive: sing-box-1.14.4-linux-amd64.tar.gz
             singbox_sha256: 699a1b510aa4396b2176d32d1181920399ebf1e267835da6f3b598d0f7c24968
             mihomo_archive: mihomo-linux-amd64-v1.19.33.gz
+            mihomo_sha256: 132f6f3edf9a65e62f04853aed3358472e0b2b7666daa8419edfa2ddf5bb6323
           - label: arm64
             runner: ubuntu-24.04-arm
             xray_archive: Xray-linux-arm64-v8a.zip
@@ -30,6 +30,7 @@ jobs:
             singbox_archive: sing-box-1.14.4-linux-arm64.tar.gz
             singbox_sha256: 436441f76ee2f7fe21b5b2d426d3cb261a480455a704865789ad533e4273ec26
             mihomo_archive: mihomo-linux-arm64-v1.19.33.gz
+            mihomo_sha256: ba408b317080ee265c46cb923a50018c1b82cbd708551cdd46a1e3e307396187
     runs-on: ${{ matrix.runner }}
     env:
       CARGO_REGISTRIES_CRATES_IO_PROTOCOL: sparse
@@ -89,12 +90,14 @@ jobs:
       - name: Download matching Aether core
         env:
           AETHER_ARCHIVE: ${{ matrix.aether_archive }}
+          AETHER_VERSION: v2.4.0
         run: |
           set -euo pipefail
           mkdir -p src-tauri/resources /tmp/aether-download /tmp/aether-extract
           cd /tmp/aether-download
-          curl -fL --retry 3 "https://github.com/CluvexStudio/Aether/releases/latest/download/${AETHER_ARCHIVE}" -o "${AETHER_ARCHIVE}"
-          curl -fL --retry 3 "https://github.com/CluvexStudio/Aether/releases/latest/download/${AETHER_ARCHIVE}.sha256" -o "${AETHER_ARCHIVE}.sha256"
+          AETHER_RELEASE_URL="https://github.com/CluvexStudio/Aether/releases/download/${AETHER_VERSION}"
+          curl -fL --retry 3 --retry-all-errors "${AETHER_RELEASE_URL}/${AETHER_ARCHIVE}" -o "${AETHER_ARCHIVE}"
+          curl -fL --retry 3 --retry-all-errors "${AETHER_RELEASE_URL}/${AETHER_ARCHIVE}.sha256" -o "${AETHER_ARCHIVE}.sha256"
           sha256sum --check "${AETHER_ARCHIVE}.sha256"
           tar -xzf "${AETHER_ARCHIVE}" -C /tmp/aether-extract
           AETHER_BIN="$(find /tmp/aether-extract -type f -name aether -print -quit)"
@@ -133,12 +136,12 @@ jobs:
       - name: Download mihomo core
         env:
           MIHOMO_ARCHIVE: ${{ matrix.mihomo_archive }}
+          MIHOMO_SHA256: ${{ matrix.mihomo_sha256 }}
         run: |
           set -euo pipefail
           mkdir -p /tmp/mihomo
           curl -fL --retry 3 "https://github.com/MetaCubeX/mihomo/releases/download/v1.19.33/${MIHOMO_ARCHIVE}" -o "/tmp/mihomo/${MIHOMO_ARCHIVE}"
-          curl -fL --retry 3 "https://github.com/MetaCubeX/mihomo/releases/download/v1.19.33/${MIHOMO_ARCHIVE}.sha256" -o "/tmp/mihomo/${MIHOMO_ARCHIVE}.sha256"
-          (cd /tmp/mihomo && sha256sum --check "${MIHOMO_ARCHIVE}.sha256")
+          echo "${MIHOMO_SHA256}  /tmp/mihomo/${MIHOMO_ARCHIVE}" | sha256sum --check
           gzip -dc "/tmp/mihomo/${MIHOMO_ARCHIVE}" > src-tauri/resources/mihomo
           chmod 0755 src-tauri/resources/mihomo
           src-tauri/resources/mihomo -v
@@ -161,8 +164,25 @@ jobs:
             'import certifi, cryptography, h2, brotli, zstandard'
           find src-tauri/resources/mhr/vendor -type d -name __pycache__ -prune -exec rm -rf {} +
 
+      - name: Verify AppImage icon
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import json, struct
+          from pathlib import Path
+          config = json.loads(Path("src-tauri/tauri.conf.json").read_text())
+          icon = Path("src-tauri") / "icons/512x512.png"
+          assert "icons/512x512.png" in config["bundle"]["icon"], "AppImage icon missing from bundle.icon"
+          with icon.open("rb") as image:
+              image.seek(16)
+              width, height = struct.unpack(">II", image.read(8))
+          assert width == height and width >= 256, f"AppImage icon must be square and at least 256px: {width}x{height}"
+          print(f"AppImage icon verified: {width}x{height}")
+          PY
+
       - name: Build AppImage and deb
-        run: npx tauri build --bundles appimage,deb
+        working-directory: src-tauri
+        run: ../node_modules/.bin/tauri build --bundles appimage,deb
 
       - name: Upload Linux packages
         uses: actions/upload-artifact@v4

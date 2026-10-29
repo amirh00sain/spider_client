@@ -30,7 +30,11 @@
       "deb"
     ],
     "shortDescription": "Xray, sing-box, mihomo, Aether and MHR desktop client",
-    "category": "Network",
+    "category": "Utility",
+    "icon": [
+      "icons/icon.png",
+      "icons/512x512.png"
+    ],
     "resources": [
       "resources/*",
       "resources/mhr",
